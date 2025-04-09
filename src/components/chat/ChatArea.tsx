@@ -1,7 +1,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
-import { collection, query, where, orderBy, addDoc, onSnapshot, doc, updateDoc, getDoc } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { ref, onValue, push, set, update, get } from "firebase/database";
+import { ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
 import { db, storage } from "@/lib/firebase";
 import { useAuth } from "@/context/AuthContext";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -54,24 +54,32 @@ const ChatArea = ({ conversationId, otherUser }: ChatAreaProps) => {
   useEffect(() => {
     if (!conversationId) return;
     
-    const q = query(
-      collection(db, "messages"),
-      where("conversationId", "==", conversationId),
-      orderBy("timestamp", "asc")
-    );
+    const messagesRef = ref(db, `messages/${conversationId}`);
     
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const messagesData = snapshot.docs.map(doc => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          senderId: data.senderId,
-          text: data.text || null,
-          audioUrl: data.audioUrl || null,
-          timestamp: data.timestamp ? new Date(data.timestamp) : new Date(),
-          isAudio: !!data.audioUrl
-        };
-      });
+    const unsubscribe = onValue(messagesRef, (snapshot) => {
+      const messagesData: Message[] = [];
+      
+      if (snapshot.exists()) {
+        const data = snapshot.val();
+        
+        // Convert object to array and sort by timestamp
+        Object.entries(data).forEach(([id, value]) => {
+          const message = value as any;
+          messagesData.push({
+            id,
+            senderId: message.senderId,
+            text: message.text || null,
+            audioUrl: message.audioUrl || null,
+            timestamp: message.timestamp ? new Date(message.timestamp) : new Date(),
+            isAudio: !!message.audioUrl
+          });
+        });
+        
+        // Sort messages by timestamp
+        messagesData.sort((a, b) => 
+          a.timestamp.getTime() - b.timestamp.getTime()
+        );
+      }
       
       setMessages(messagesData);
     });
@@ -83,18 +91,21 @@ const ChatArea = ({ conversationId, otherUser }: ChatAreaProps) => {
     if (!messageText.trim() || !conversationId || !currentUser) return;
     
     try {
-      // Add message to Firestore
-      await addDoc(collection(db, "messages"), {
-        conversationId,
+      const timestamp = new Date().toISOString();
+      
+      // Add message to database
+      const newMessageRef = push(ref(db, `messages/${conversationId}`));
+      await set(newMessageRef, {
         senderId: currentUser.uid,
         text: messageText,
-        timestamp: new Date().toISOString(),
+        timestamp: timestamp,
       });
       
       // Update conversation's last message
-      await updateDoc(doc(db, "conversations", conversationId), {
+      const conversationRef = ref(db, `conversations/${conversationId}`);
+      await update(conversationRef, {
         lastMessage: messageText,
-        lastMessageTime: new Date().toISOString()
+        lastMessageTime: timestamp
       });
       
       setMessageText("");
@@ -157,24 +168,27 @@ const ChatArea = ({ conversationId, otherUser }: ChatAreaProps) => {
       const audioBlob = await response.blob();
       
       // Upload audio to Firebase Storage
-      const storageRef = ref(storage, `audio/${conversationId}/${Date.now()}.webm`);
-      await uploadBytes(storageRef, audioBlob);
+      const audioStorageRef = storageRef(storage, `audio/${conversationId}/${Date.now()}.webm`);
+      await uploadBytes(audioStorageRef, audioBlob);
       
       // Get download URL
-      const downloadURL = await getDownloadURL(storageRef);
+      const downloadURL = await getDownloadURL(audioStorageRef);
       
-      // Add message to Firestore
-      await addDoc(collection(db, "messages"), {
-        conversationId,
+      const timestamp = new Date().toISOString();
+      
+      // Add message to database
+      const newMessageRef = push(ref(db, `messages/${conversationId}`));
+      await set(newMessageRef, {
         senderId: currentUser.uid,
         audioUrl: downloadURL,
-        timestamp: new Date().toISOString(),
+        timestamp: timestamp,
       });
       
       // Update conversation's last message
-      await updateDoc(doc(db, "conversations", conversationId), {
+      const conversationRef = ref(db, `conversations/${conversationId}`);
+      await update(conversationRef, {
         lastMessage: "🎤 Audio message",
-        lastMessageTime: new Date().toISOString(),
+        lastMessageTime: timestamp,
       });
       
       setAudioURL(null);

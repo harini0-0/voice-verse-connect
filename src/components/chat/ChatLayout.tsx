@@ -1,6 +1,6 @@
 
 import { useState } from "react";
-import { collection, query, where, getDocs, addDoc, serverTimestamp } from "firebase/firestore";
+import { ref, get, child, push, set, serverTimestamp } from "firebase/database";
 import { useAuth } from "@/context/AuthContext";
 import { db } from "@/lib/firebase";
 import { useToast } from "@/components/ui/use-toast";
@@ -48,34 +48,40 @@ const ChatLayout = () => {
     
     try {
       // Check if conversation already exists
-      const conversationsRef = collection(db, "conversations");
-      const q = query(
-        conversationsRef,
-        where("participants", "array-contains", currentUser.uid)
-      );
+      const conversationsRef = ref(db, "conversations");
+      const conversationsSnapshot = await get(conversationsRef);
       
-      const querySnapshot = await getDocs(q);
-      let existingConversation = null;
+      let existingConversationId = null;
       
-      querySnapshot.forEach((doc) => {
-        const data = doc.data();
-        if (data.participants.includes(user.uid)) {
-          existingConversation = { id: doc.id, ...data };
-        }
-      });
+      if (conversationsSnapshot.exists()) {
+        const conversations = conversationsSnapshot.val();
+        
+        // Find conversation where both users are participants
+        Object.entries(conversations).forEach(([id, value]) => {
+          const convo = value as any;
+          if (convo.participants && 
+              convo.participants.includes(currentUser.uid) && 
+              convo.participants.includes(user.uid)) {
+            existingConversationId = id;
+          }
+        });
+      }
       
-      if (existingConversation) {
+      if (existingConversationId) {
         // Use existing conversation
-        setSelectedConversation(existingConversation.id);
+        setSelectedConversation(existingConversationId);
       } else {
         // Create new conversation
-        const newConversationRef = await addDoc(conversationsRef, {
+        const newConversationRef = push(conversationsRef);
+        const timestamp = new Date().toISOString();
+        
+        await set(newConversationRef, {
           participants: [currentUser.uid, user.uid],
-          createdAt: serverTimestamp(),
-          lastMessageTime: serverTimestamp(),
+          createdAt: timestamp,
+          lastMessageTime: timestamp,
         });
         
-        setSelectedConversation(newConversationRef.id);
+        setSelectedConversation(newConversationRef.key);
       }
       
       setSelectedUser(user);

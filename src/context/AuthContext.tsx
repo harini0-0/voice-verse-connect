@@ -8,7 +8,7 @@ import {
   updateProfile,
   User
 } from "firebase/auth";
-import { doc, setDoc, getDoc } from "firebase/firestore";
+import { ref, set, get } from "firebase/database";
 import { auth, db } from "@/lib/firebase";
 import { useToast } from "@/components/ui/use-toast";
 
@@ -43,8 +43,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       // Update profile with display name
       await updateProfile(user, { displayName });
       
-      // Create user document in Firestore
-      await setDoc(doc(db, "users", user.uid), {
+      // Create user document in Realtime Database
+      await set(ref(db, `users/${user.uid}`), {
         uid: user.uid,
         email,
         displayName,
