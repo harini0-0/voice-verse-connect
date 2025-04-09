@@ -48,8 +48,8 @@ const ChatSidebar = ({ onSelectConversation, onNewChat, onLogout }: ChatSidebarP
     const unsubscribe = onSnapshot(q, async (snapshot) => {
       const conversationsData: Conversation[] = [];
       
-      for (const doc of snapshot.docs) {
-        const data = doc.data();
+      for (const docSnapshot of snapshot.docs) {
+        const data = docSnapshot.data();
         
         // Get the other user's ID
         const otherUserId = data.participants.find(
@@ -59,14 +59,18 @@ const ChatSidebar = ({ onSelectConversation, onNewChat, onLogout }: ChatSidebarP
         // Get other user's data
         let otherUser = null;
         if (otherUserId) {
-          const userDoc = await getDoc(doc(db, "users", otherUserId));
-          if (userDoc.exists()) {
-            otherUser = userDoc.data() as User;
+          const userDocRef = doc(db, "users", otherUserId);
+          const userDocSnapshot = await getDoc(userDocRef);
+          if (userDocSnapshot.exists()) {
+            otherUser = { 
+              uid: otherUserId,
+              ...userDocSnapshot.data()
+            } as User;
           }
         }
         
         conversationsData.push({
-          id: doc.id,
+          id: docSnapshot.id,
           participants: data.participants,
           lastMessage: data.lastMessage || "Start a conversation",
           lastMessageTime: data.lastMessageTime ? new Date(data.lastMessageTime) : new Date(),
