@@ -78,6 +78,66 @@ def speech_to_speech(audio_file_path, source_language, target_language):
             'error': str(e)
         }
 
+def handle_text_translation(text, target_language, to_speech=False):
+    if to_speech:
+        result = text_to_speech(text, target_language)
+        if result['success']:
+            return send_file(
+                result['audio_path'],
+                mimetype='audio/mp3',
+                as_attachment=True,
+                download_name='translation.mp3'
+            )
+    else:
+        result = text_to_text(text, target_language)
+        if result['success']:
+            return jsonify({'translated_text': result['translated_text']})
+    
+    return jsonify({'error': result['error']}), 500
+
+def handle_speech_translation(audio_file, source_language, target_language, to_speech=False):
+    # Create temporary directory for audio file
+    temp_dir = tempfile.mkdtemp()
+    audio_path = os.path.join(temp_dir, secure_filename(audio_file.filename))
+    
+    try:
+        # Save uploaded audio file
+        audio_file.save(audio_path)
+        
+        if to_speech:
+            result = speech_to_speech(audio_path, source_language, target_language)
+            if result['success']:
+                return send_file(
+                    result['audio_path'],
+                    mimetype='audio/mp3',
+                    as_attachment=True,
+                    download_name='translation.mp3'
+                )
+        else:
+            result = speech_to_text(audio_path, source_language)
+            if result['success']:
+                # Translate text if target language is different
+                if target_language != source_language:
+                    translation_result = text_to_text(result['text'], target_language)
+                    if translation_result['success']:
+                        return jsonify({
+                            'original_text': result['text'],
+                            'translated_text': translation_result['translated_text']
+                        })
+                    result = translation_result
+                else:
+                    return jsonify({'text': result['text']})
+        
+        return jsonify({'error': result['error']}), 500
+        
+    finally:
+        # Clean up temporary files
+        try:
+            os.remove(audio_path)
+            os.rmdir(temp_dir)
+        except:
+            pass
+
 @app.route("/translate", methods=['POST'])
 def translate():
     try:
@@ -86,30 +146,34 @@ def translate():
             
         option = request.form['option']
         target_language = request.form.get('language', 'en')
+        source_language = request.form.get('source_language', 'en')
         
         # Handle text-based translations
         if option in ['text-to-text', 'text-to-speech']:
             if 'text' not in request.form:
                 return jsonify({'error': 'Missing text parameter'}), 400
             
-            text = request.form['text']
+            return handle_text_translation(
+                request.form['text'],
+                target_language,
+                to_speech=(option == 'text-to-speech')
+            )
+        
+        # Handle speech-based translations
+        elif option in ['speech-to-text', 'speech-to-speech']:
+            if 'audio' not in request.files:
+                return jsonify({'error': 'Missing audio file'}), 400
             
-            if option == 'text-to-text':
-                result = text_to_text(text, target_language)
-                if result['success']:
-                    return jsonify({'translated_text': result['translated_text']})
-                return jsonify({'error': result['error']}), 500
-                
-            elif option == 'text-to-speech':
-                result = text_to_speech(text, target_language)
-                if result['success']:
-                    return send_file(
-                        result['audio_path'],
-                        mimetype='audio/mp3',
-                        as_attachment=True,
-                        download_name='translation.mp3'
-                    )
-                return jsonify({'error': result['error']}), 500
+            audio_file = request.files['audio']
+            if audio_file.filename == '':
+                return jsonify({'error': 'No selected audio file'}), 400
+            
+            return handle_speech_translation(
+                audio_file,
+                source_language,
+                target_language,
+                to_speech=(option == 'speech-to-speech')
+            )
         
         return jsonify({'error': 'Invalid option'}), 400
         

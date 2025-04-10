@@ -449,7 +449,7 @@ const ChatArea = ({ conversationId, otherUser }: ChatAreaProps) => {
 
                   try {
                     const formData = new FormData();
-                    formData.append('option', 'text-to-text');
+                    formData.append('option', message.isAudio ? 'speech-to-text' : 'text-to-text');
                     formData.append('text', message.text || '');
                     formData.append('language', language);
 
@@ -508,7 +508,7 @@ const ChatArea = ({ conversationId, otherUser }: ChatAreaProps) => {
 
                   try {
                     const formData = new FormData();
-                    formData.append('option', 'text-to-speech');
+                    formData.append('option', message.isAudio ? 'speech-to-speech' : 'text-to-speech');
                     formData.append('text', message.text || '');
                     formData.append('language', language);
 

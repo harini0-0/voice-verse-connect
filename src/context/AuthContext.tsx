@@ -11,6 +11,7 @@ import {
 import { ref, set, get } from "firebase/database";
 import { auth, db } from "@/lib/firebase";
 import { useToast } from "@/components/ui/use-toast";
+import { setDoc, doc } from "firebase/firestore";
 
 interface AuthContextType {
   currentUser: User | null;
@@ -43,8 +44,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       // Update profile with display name
       await updateProfile(user, { displayName });
       
-      // Create user document in Realtime Database
-      await set(ref(db, `users/${user.uid}`), {
+      // Create user document in Firestore
+      await setDoc(doc(db, "users", user.uid), {
         uid: user.uid,
         email,
         displayName,
@@ -66,7 +67,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       throw error;
     }
   };
-
+  
+  // ... rest of the component ...
   const signIn = async (email: string, password: string) => {
     try {
       await signInWithEmailAndPassword(auth, email, password);
