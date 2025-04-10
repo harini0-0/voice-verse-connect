@@ -1,95 +1,120 @@
-from flask import Flask, request, url_for, redirect, render_template
-from googletrans import Translator
+from flask import Flask, request, jsonify, send_file
+from flask_cors import CORS
+from deep_translator import GoogleTranslator
 from gtts import gTTS
 import os
 import speech_recognition as sr
+import tempfile
+from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
-translator = Translator()
+CORS(app)
 
-
-# 1 - text to text, 2 - speech to speech, 3 - text to speech, 4 - speech to speech
-
-
-def text_to_speech(text_to_translate, selected_language):
-    # text_to_translate= input("Enter the text:- ")
-    text = translator.translate(text_to_translate, dest="ja").text
-    tts = gTTS(text = text, lang=selected_language)
-    tts.save("output.mp3")
-    os.system("start output.mp3")
-
-def text_to_text(text_to_translate, selected_language):
-    # text_to_translate= input("Enter the text:- ")
-    text = translator.translate(text_to_translate, dest=selected_language).text
-    print(text)
-
-def speech_to_text():
-    recognizer = sr.Recognizer()
-    with sr.Microphone() as source:
-        print("Speak...")
-        recognizer.adjust_for_ambient_noise(source, duration=0.2)
-        audio = recognizer.listen(source)
-
+def text_to_text(text_to_translate, target_language):
     try:
-        print("Recognizing...")
-        text = recognizer.recognize_google(audio, language='it')
-        print(f"You said: {text}")
-    except sr.UnknownValueError:
-        print("Sorry, could not understand audio.")
-    except sr.RequestError as e:
-        print(f"Error: {e}")
+        translator = GoogleTranslator(target=target_language)
+        translated_text = translator.translate(text_to_translate)
+        return {
+            'success': True,
+            'translated_text': translated_text
+        }
+    except Exception as e:
+        return {
+            'success': False,
+            'error': str(e)
+        }
 
-def speech_to_speech():
-    recognizer = sr.Recognizer()
-    with sr.Microphone() as source:
-        print("Speak...")
-        recognizer.adjust_for_ambient_noise(source, duration=0.2)
-        audio = recognizer.listen(source)
-
+def text_to_speech(text_to_translate, target_language):
     try:
-        print("Recognizing...")
-        text = recognizer.recognize_google(audio, language='it')
-        print(f"You said: {text}")
-        text_to_translate= text
-        text = translator.translate(text_to_translate, dest="it").text
-        print(text)
-        text = translator.translate(text, dest="ja").text
-        tts = gTTS(text = text, lang="ja")
-        tts.save("output.mp3")
-        os.system("start output.mp3")
-    except sr.UnknownValueError:
-        print("Sorry, could not understand audio.")
-    except sr.RequestError as e:
-        print(f"Error: {e}")
+        translator = GoogleTranslator(target=target_language)
+        translated_text = translator.translate(text_to_translate)
+        tts = gTTS(text=translated_text, lang=target_language)
         
+        # Save to temporary file
+        temp_file = tempfile.NamedTemporaryFile(suffix='.mp3', delete=False)
+        tts.save(temp_file.name)
+        
+        return {
+            'success': True,
+            'translated_text': translated_text,
+            'audio_path': temp_file.name
+        }
+    except Exception as e:
+        return {
+            'success': False,
+            'error': str(e)
+        }
 
-@app.route("/", methods=['POST', 'GET'])
-def home():
-    if request.method == 'POST':
-        try:
-            text_to_translate = request.form["text-to-translate"].lower()
-            selected_language = request.form["select-language"]
-            translation_option = request.form["translation-option"]
-            if translation_option == '1':
-                text_to_speech(text_to_translate, selected_language)
-            elif translation_option == '2':
-                speech_to_text()
-            elif translation_option == '3':
-                speech_to_speech()
-            elif translation_option == '4':
-                text_to_text(text_to_translate, selected_language)
-            else:
-                print("Invalid choice. Please select a valid option.")
-        except:
-            text = "{ERROR: We are not able to handle your request right now}"
-        return render_template('index.html', translation_result="text")
-    return render_template("index.html")
+def speech_to_text(audio_file_path, source_language='en'):
+    try:
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(audio_file_path) as source:
+            audio = recognizer.record(source)
+        
+        text = recognizer.recognize_google(audio, language=source_language)
+        return {
+            'success': True,
+            'text': text
+        }
+    except Exception as e:
+        return {
+            'success': False,
+            'error': str(e)
+        }
 
+def speech_to_speech(audio_file_path, source_language, target_language):
+    try:
+        # First convert speech to text
+        speech_result = speech_to_text(audio_file_path, source_language)
+        if not speech_result['success']:
+            return speech_result
+        
+        # Then translate and convert to speech
+        text = speech_result['text']
+        return text_to_speech(text, target_language)
+    except Exception as e:
+        return {
+            'success': False,
+            'error': str(e)
+        }
 
-@app.route("/team")
-def team():
-    return render_template("team.html")
-
+@app.route("/translate", methods=['POST'])
+def translate():
+    try:
+        if 'option' not in request.form:
+            return jsonify({'error': 'Missing option parameter'}), 400
+            
+        option = request.form['option']
+        target_language = request.form.get('language', 'en')
+        
+        # Handle text-based translations
+        if option in ['text-to-text', 'text-to-speech']:
+            if 'text' not in request.form:
+                return jsonify({'error': 'Missing text parameter'}), 400
+            
+            text = request.form['text']
+            
+            if option == 'text-to-text':
+                result = text_to_text(text, target_language)
+                if result['success']:
+                    return jsonify({'translated_text': result['translated_text']})
+                return jsonify({'error': result['error']}), 500
+                
+            elif option == 'text-to-speech':
+                result = text_to_speech(text, target_language)
+                if result['success']:
+                    return send_file(
+                        result['audio_path'],
+                        mimetype='audio/mp3',
+                        as_attachment=True,
+                        download_name='translation.mp3'
+                    )
+                return jsonify({'error': result['error']}), 500
+        
+        return jsonify({'error': 'Invalid option'}), 400
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == "__main__":
-    app.run("0.0.0.0", debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=True)

@@ -1,5 +1,6 @@
+
 import React, { useEffect, useState } from "react";
-import { ref, onValue, query as dbQuery, orderByChild, equalTo, get, child } from "firebase/database";
+import { collection, query, where, onSnapshot, orderBy, doc, getDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/context/AuthContext";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -38,52 +39,43 @@ const ChatSidebar = ({ onSelectConversation, onNewChat, onLogout }: ChatSidebarP
     if (!currentUser) return;
 
     // Get conversations where current user is a participant
-    const conversationsRef = ref(db, "conversations");
-    
-    const unsubscribe = onValue(conversationsRef, async (snapshot) => {
+    const q = query(
+      collection(db, "conversations"),
+      where("participants", "array-contains", currentUser.uid),
+      orderBy("lastMessageTime", "desc")
+    );
+
+    const unsubscribe = onSnapshot(q, async (snapshot) => {
       const conversationsData: Conversation[] = [];
       
-      if (snapshot.exists()) {
-        const data = snapshot.val();
+      for (const docSnapshot of snapshot.docs) {
+        const data = docSnapshot.data();
         
-        for (const [id, value] of Object.entries(data)) {
-          const convo = value as any;
-          
-          // Check if current user is a participant
-          if (convo.participants && convo.participants.includes(currentUser.uid)) {
-            // Get the other user's ID
-            const otherUserId = convo.participants.find(
-              (uid: string) => uid !== currentUser.uid
-            );
-            
-            // Get other user's data
-            let otherUser = null;
-            if (otherUserId) {
-              const userRef = ref(db, `users/${otherUserId}`);
-              const userSnapshot = await get(userRef);
-              
-              if (userSnapshot.exists()) {
-                otherUser = { 
-                  uid: otherUserId,
-                  ...userSnapshot.val()
-                } as User;
-              }
-            }
-            
-            conversationsData.push({
-              id: id,
-              participants: convo.participants,
-              lastMessage: convo.lastMessage || "Start a conversation",
-              lastMessageTime: convo.lastMessageTime ? new Date(convo.lastMessageTime) : new Date(),
-              otherUser
-            });
+        // Get the other user's ID
+        const otherUserId = data.participants.find(
+          (uid: string) => uid !== currentUser.uid
+        );
+        
+        // Get other user's data
+        let otherUser = null;
+        if (otherUserId) {
+          const userDocRef = doc(db, "users", otherUserId);
+          const userDocSnapshot = await getDoc(userDocRef);
+          if (userDocSnapshot.exists()) {
+            otherUser = { 
+              uid: otherUserId,
+              ...userDocSnapshot.data()
+            } as User;
           }
         }
         
-        // Sort conversations by lastMessageTime in descending order
-        conversationsData.sort((a, b) => 
-          b.lastMessageTime.getTime() - a.lastMessageTime.getTime()
-        );
+        conversationsData.push({
+          id: docSnapshot.id,
+          participants: data.participants,
+          lastMessage: data.lastMessage || "Start a conversation",
+          lastMessageTime: data.lastMessageTime ? new Date(data.lastMessageTime) : new Date(),
+          otherUser
+        });
       }
       
       setConversations(conversationsData);
@@ -179,7 +171,7 @@ const ChatSidebar = ({ onSelectConversation, onNewChat, onLogout }: ChatSidebarP
       
       {/* Conversations List */}
       <div className="flex-grow overflow-y-auto scrollbar-hide">
-        {conversations.length === 0 ? (
+        {filteredConversations.length === 0 ? (
           <div className="p-8 text-center text-gray-500 flex flex-col items-center">
             <MessageSquare className="h-10 w-10 mb-2 opacity-50" />
             <p>No conversations yet</p>
@@ -187,46 +179,41 @@ const ChatSidebar = ({ onSelectConversation, onNewChat, onLogout }: ChatSidebarP
           </div>
         ) : (
           <div>
-            {conversations
-              .filter(convo => 
-                convo.otherUser && 
-                convo.otherUser.displayName.toLowerCase().includes(searchQuery.toLowerCase())
-              )
-              .map((conversation) => (
-                <div
-                  key={conversation.id}
-                  onClick={() => 
-                    conversation.otherUser && 
-                    onSelectConversation(conversation.id, conversation.otherUser)
-                  }
-                  className="flex items-center p-4 hover:bg-gray-100 cursor-pointer transition-colors"
-                >
-                  <Avatar className="h-12 w-12 mr-3 flex-shrink-0">
-                    {conversation.otherUser?.photoURL ? (
-                      <AvatarImage src={conversation.otherUser.photoURL} />
-                    ) : (
-                      <AvatarFallback className="bg-chat-secondary text-white">
-                        {conversation.otherUser?.displayName 
-                          ? getInitials(conversation.otherUser.displayName) 
-                          : "?"}
-                      </AvatarFallback>
-                    )}
-                  </Avatar>
-                  <div className="flex-grow min-w-0">
-                    <div className="flex justify-between items-baseline">
-                      <h4 className="font-medium truncate">
-                        {conversation.otherUser?.displayName || "Unknown User"}
-                      </h4>
-                      <span className="text-xs text-gray-500 ml-2 flex-shrink-0">
-                        {formatTime(conversation.lastMessageTime)}
-                      </span>
-                    </div>
-                    <p className="text-sm text-gray-500 truncate">
-                      {conversation.lastMessage}
-                    </p>
+            {filteredConversations.map((conversation) => (
+              <div
+                key={conversation.id}
+                onClick={() => 
+                  conversation.otherUser && 
+                  onSelectConversation(conversation.id, conversation.otherUser)
+                }
+                className="flex items-center p-4 hover:bg-gray-100 cursor-pointer transition-colors"
+              >
+                <Avatar className="h-12 w-12 mr-3 flex-shrink-0">
+                  {conversation.otherUser?.photoURL ? (
+                    <AvatarImage src={conversation.otherUser.photoURL} />
+                  ) : (
+                    <AvatarFallback className="bg-chat-secondary text-white">
+                      {conversation.otherUser?.displayName 
+                        ? getInitials(conversation.otherUser.displayName) 
+                        : "?"}
+                    </AvatarFallback>
+                  )}
+                </Avatar>
+                <div className="flex-grow min-w-0">
+                  <div className="flex justify-between items-baseline">
+                    <h4 className="font-medium truncate">
+                      {conversation.otherUser?.displayName || "Unknown User"}
+                    </h4>
+                    <span className="text-xs text-gray-500 ml-2 flex-shrink-0">
+                      {formatTime(conversation.lastMessageTime)}
+                    </span>
                   </div>
+                  <p className="text-sm text-gray-500 truncate">
+                    {conversation.lastMessage}
+                  </p>
                 </div>
-              ))}
+              </div>
+            ))}
           </div>
         )}
       </div>

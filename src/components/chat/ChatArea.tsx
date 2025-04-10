@@ -1,7 +1,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
-import { ref, onValue, push, set, update, get } from "firebase/database";
-import { ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
+import { collection, query, where, orderBy, addDoc, onSnapshot, doc, updateDoc, getDoc } from "firebase/firestore";
+import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { db, storage } from "@/lib/firebase";
 import { useAuth } from "@/context/AuthContext";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -19,6 +19,9 @@ interface User {
   email: string;
 }
 
+const CLOUD_NAME = "dkrimzkxr"; // from Cloudinary dashboard
+const UPLOAD_PRESET = "audio_upload_preset";
+
 interface Message {
   id: string;
   senderId: string;
@@ -35,8 +38,10 @@ interface MessageDisp {
   audioUrl: string | null;
   timestamp: Date;
   isAudio: boolean;
-  isTranslate: boolean | null;
-  toText: boolean | null;
+  isTranslate: boolean;
+  toText: boolean;
+  translatedText: string | null;
+  translatedAudioUrl: string | null;
 }
 
 interface ChatAreaProps {
@@ -65,37 +70,31 @@ const ChatArea = ({ conversationId, otherUser }: ChatAreaProps) => {
   // Load messages when conversation changes
   useEffect(() => {
     if (!conversationId) return;
+  
+    const q = query(
+      collection(db, "messages"),
+      where("conversationId", "==", conversationId),
+      orderBy("timestamp", "asc")
+    );
     
-    const messagesRef = ref(db, `messages/${conversationId}`);
-    
-    const unsubscribe = onValue(messagesRef, (snapshot) => {
-      const messagesData: Message[] = [];
-      
-      if (snapshot.exists()) {
-        const data = snapshot.val();
-        
-        // Convert object to array and sort by timestamp
-        Object.entries(data).forEach(([id, value]) => {
-          const message = value as any;
-          messagesData.push({
-            id,
-            senderId: message.senderId,
-            text: message.text || null,
-            audioUrl: message.audioUrl || null,
-            timestamp: message.timestamp ? new Date(message.timestamp) : new Date(),
-            isAudio: !!message.audioUrl
-          });
-        });
-        
-        // Sort messages by timestamp
-        messagesData.sort((a, b) => 
-          a.timestamp.getTime() - b.timestamp.getTime()
-        );
-      }
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const messagesData = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          senderId: data.senderId,
+          text: data.text || null,
+          audioUrl: data.audioUrl || null,
+          timestamp: data.timestamp ? new Date(data.timestamp) : new Date(),
+          isAudio: !!data.audioUrl
+        };
+      });
       const messagesDataWithTranslate = messagesData.map((message) => ({
         ...message,
         isTranslate: null,
         toText: null,
+        translatedText: null,
+        translatedAudioUrl: null
       }));
       setMessages(messagesDataWithTranslate);
     });
@@ -107,21 +106,18 @@ const ChatArea = ({ conversationId, otherUser }: ChatAreaProps) => {
     if (!messageText.trim() || !conversationId || !currentUser) return;
     
     try {
-      const timestamp = new Date().toISOString();
-      
-      // Add message to database
-      const newMessageRef = push(ref(db, `messages/${conversationId}`));
-      await set(newMessageRef, {
+      // Add message to Firestore
+      await addDoc(collection(db, "messages"), {
+        conversationId,
         senderId: currentUser.uid,
         text: messageText,
-        timestamp: timestamp,
+        timestamp: new Date().toISOString(),
       });
       
       // Update conversation's last message
-      const conversationRef = ref(db, `conversations/${conversationId}`);
-      await update(conversationRef, {
+      await updateDoc(doc(db, "conversations", conversationId), {
         lastMessage: messageText,
-        lastMessageTime: timestamp
+        lastMessageTime: new Date().toISOString()
       });
       
       setMessageText("");
@@ -182,29 +178,36 @@ const ChatArea = ({ conversationId, otherUser }: ChatAreaProps) => {
       // Convert audio URL to Blob
       const response = await fetch(audioURL);
       const audioBlob = await response.blob();
+      const formData = new FormData();
+      formData.append("file", audioBlob);
+      formData.append("upload_preset", UPLOAD_PRESET);
+      const res = await fetch(`https://api.cloudinary.com/v1_1/${CLOUD_NAME}/video/upload`, {
+        method: "POST",
+        body: formData,
+      });
+  
+      const data = await res.json();
       
       // Upload audio to Firebase Storage
-      const audioStorageRef = storageRef(storage, `audio/${conversationId}/${Date.now()}.webm`);
-      await uploadBytes(audioStorageRef, audioBlob);
+      // const storageRef = ref(storage, `audio/${conversationId}/${Date.now()}.webm`);
+      // await uploadBytes(storageRef, audioBlob);
       
-      // Get download URL
-      const downloadURL = await getDownloadURL(audioStorageRef);
+      // // Get download URL
+      // const downloadURL = await getDownloadURL(storageRef);
+      const downloadURL = data.secure_url;
       
-      const timestamp = new Date().toISOString();
-      
-      // Add message to database
-      const newMessageRef = push(ref(db, `messages/${conversationId}`));
-      await set(newMessageRef, {
+      // Add message to Firestore
+      await addDoc(collection(db, "messages"), {
+        conversationId,
         senderId: currentUser.uid,
         audioUrl: downloadURL,
-        timestamp: timestamp,
+        timestamp: new Date().toISOString(),
       });
       
       // Update conversation's last message
-      const conversationRef = ref(db, `conversations/${conversationId}`);
-      await update(conversationRef, {
+      await updateDoc(doc(db, "conversations", conversationId), {
         lastMessage: "🎤 Audio message",
-        lastMessageTime: timestamp,
+        lastMessageTime: new Date().toISOString(),
       });
       
       setAudioURL(null);
@@ -390,17 +393,170 @@ const ChatArea = ({ conversationId, otherUser }: ChatAreaProps) => {
                 >
                   {formatTime(message.timestamp)}
                 </div>
+                {message.senderId !== currentUser?.uid && message.isTranslate && (
+                  <div className={`text-xs mt-2 italic "text-gray-200"`}>
+                    {message.toText ? (
+                      message.translatedText ? (
+                        <div className="italic">{message.translatedText}</div>
+                      ) : message.translatedText === "" ? (<div>Translation failed</div>) : (
+                        <div className="italic">Translating to text...</div>
+                      )
+                    ) : (
+                      message.translatedAudioUrl ? (
+                        <div className="flex items-center">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className={`h-8 w-8 p-0 mr-2 ${
+                              message.senderId === currentUser?.uid
+                                ? "text-white hover:text-white hover:bg-opacity-20 hover:bg-white"
+                                : "text-chat-primary hover:text-chat-secondary hover:bg-transparent"
+                            }`}
+                            onClick={() => {
+                              if (isPlaying[`${message.id}-translation`]) {
+                                stopAudio(message.translatedAudioUrl!, `${message.id}-translation`);
+                              } else {
+                                playAudio(message.translatedAudioUrl!, `${message.id}-translation`);
+                              }
+                            }}
+                          >
+                            {isPlaying[`${message.id}-translation`] ? (
+                              <StopCircle className="h-6 w-6" />
+                            ) : (
+                              <Play className="h-6 w-6" />
+                            )}
+                          </Button>
+                          <span className="text-sm italic">Translated audio</span>
+                        </div>
+                      ) : (
+                        <div className="italic">Translating to speech...</div>
+                      )
+                    )}
+                  </div>
+                )}
               </div>
               {message.senderId !== currentUser?.uid && (
                 <MessageOptions
-                onTranslateToText={(language) => {
-                  // Implement translation to text logic
-                  console.log(`Translating message to ${language} text`);
+                onTranslateToText={async (language) => {
+                  // First update UI to show translation is in progress
+                  setMessages(prevMessages => 
+                    prevMessages.map(msg => 
+                      msg.id === message.id 
+                        ? { ...msg, isTranslate: true, toText: true, translatedText: null }
+                        : msg
+                    )
+                  );
+
+                  try {
+                    const formData = new FormData();
+                    formData.append('option', 'text-to-text');
+                    formData.append('text', message.text || '');
+                    formData.append('language', language);
+
+                    const response = await fetch('http://localhost:5000/translate', {
+                      method: 'POST',
+                      body: formData
+                    });
+
+                    if (!response.ok) {
+                      throw new Error('Translation failed');
+                    }
+
+                    const data = await response.json();
+                    
+                    // Update message with translated text
+                    setMessages(prevMessages => 
+                      prevMessages.map(msg => 
+                        msg.id === message.id 
+                          ? { 
+                              ...msg, 
+                              translatedText: data.translated_text,
+                              isTranslate: true,
+                              toText: true 
+                            }
+                          : msg
+                      )
+                    );
+                  } catch (error) {
+                    console.error('Translation error:', error);
+                    toast({
+                      variant: "destructive",
+                      title: "Translation failed",
+                      description: "Please try again later.",
+                    });
+                    
+                    // Reset translation state on error
+                    setMessages(prevMessages => 
+                      prevMessages.map(msg => 
+                        msg.id === message.id 
+                          ? { ...msg, isTranslate: false, toText: false }
+                          : msg
+                      )
+                    );
+                  }
                 }}
-                onTranslateToSpeech={(language) => {
-                  // Implement translation to speech logic
-                  console.log(`Translating message to ${language} speech`);
+
+                onTranslateToSpeech={async (language) => {
+                  // First update UI to show translation is in progress
+                  setMessages(prevMessages => 
+                    prevMessages.map(msg => 
+                      msg.id === message.id 
+                        ? { ...msg, isTranslate: true, toText: false, translatedAudioUrl: null }
+                        : msg
+                    )
+                  );
+
+                  try {
+                    const formData = new FormData();
+                    formData.append('option', 'text-to-speech');
+                    formData.append('text', message.text || '');
+                    formData.append('language', language);
+
+                    const response = await fetch('http://localhost:5000/translate', {
+                      method: 'POST',
+                      body: formData
+                    });
+
+                    if (!response.ok) {
+                      throw new Error('Translation failed');
+                    }
+
+                    // Convert the response to blob and create an audio URL
+                    const audioBlob = await response.blob();
+                    const audioUrl = URL.createObjectURL(audioBlob);
+                    
+                    // Update message with translated audio
+                    setMessages(prevMessages => 
+                      prevMessages.map(msg => 
+                        msg.id === message.id 
+                          ? { 
+                              ...msg, 
+                              translatedAudioUrl: audioUrl,
+                              isTranslate: true,
+                              toText: false 
+                            }
+                          : msg
+                      )
+                    );
+                  } catch (error) {
+                    console.error('Translation error:', error);
+                    toast({
+                      variant: "destructive",
+                      title: "Translation failed",
+                      description: "Please try again later.",
+                    });
+                    
+                    // Reset translation state on error
+                    setMessages(prevMessages => 
+                      prevMessages.map(msg => 
+                        msg.id === message.id 
+                          ? { ...msg, isTranslate: false, toText: false }
+                          : msg
+                      )
+                    );
+                  }
                 }}
+                
                 />
               )}
             </div>
@@ -417,6 +573,14 @@ const ChatArea = ({ conversationId, otherUser }: ChatAreaProps) => {
               className="h-5 w-5 text-chat-primary mr-2 cursor-pointer"
               onClick={() => {
                 const audio = new Audio(audioURL);
+                audio.onerror = (e) => {
+                  console.error("Error loading audio:", e);
+                  toast({
+                    variant: "destructive",
+                    title: "Failed to load audio",
+                    description: "Please try again later.",
+                  });
+                };
                 audio.play();
               }}
             />
