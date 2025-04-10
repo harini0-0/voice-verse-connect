@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Send, Mic, StopCircle, Play, User } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "@/components/ui/use-toast";
+import MessageOptions from "./MessageOptions";
 
 interface User {
   uid: string;
@@ -27,6 +28,17 @@ interface Message {
   isAudio: boolean;
 }
 
+interface MessageDisp {
+  id: string;
+  senderId: string;
+  text: string | null;
+  audioUrl: string | null;
+  timestamp: Date;
+  isAudio: boolean;
+  isTranslate: boolean | null;
+  toText: boolean | null;
+}
+
 interface ChatAreaProps {
   conversationId: string | null;
   otherUser: User | null;
@@ -34,7 +46,7 @@ interface ChatAreaProps {
 
 const ChatArea = ({ conversationId, otherUser }: ChatAreaProps) => {
   const { currentUser } = useAuth();
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<MessageDisp[]>([]);
   const [messageText, setMessageText] = useState("");
   const [isRecording, setIsRecording] = useState(false);
   const [audioURL, setAudioURL] = useState<string | null>(null);
@@ -72,8 +84,12 @@ const ChatArea = ({ conversationId, otherUser }: ChatAreaProps) => {
           isAudio: !!data.audioUrl
         };
       });
-      
-      setMessages(messagesData);
+      const messagesDataWithTranslate = messagesData.map((message) => ({
+        ...message,
+        isTranslate: null,
+        toText: null,
+      }));
+      setMessages(messagesDataWithTranslate);
     });
     
     return () => unsubscribe();
@@ -361,6 +377,18 @@ const ChatArea = ({ conversationId, otherUser }: ChatAreaProps) => {
                   {formatTime(message.timestamp)}
                 </div>
               </div>
+              {message.senderId !== currentUser?.uid && (
+                <MessageOptions
+                onTranslateToText={(language) => {
+                  // Implement translation to text logic
+                  console.log(`Translating message to ${language} text`);
+                }}
+                onTranslateToSpeech={(language) => {
+                  // Implement translation to speech logic
+                  console.log(`Translating message to ${language} speech`);
+                }}
+                />
+              )}
             </div>
           ))
         )}

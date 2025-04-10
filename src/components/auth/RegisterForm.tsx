@@ -5,6 +5,8 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { addDoc, collection } from "firebase/firestore";
+import { db } from "@/lib/firebase";
 import {
   Form,
   FormControl,
@@ -15,6 +17,7 @@ import {
 } from "@/components/ui/form";
 import { useAuth } from "@/context/AuthContext";
 import { Loader2 } from "lucide-react";
+import { randomUUID } from "node:crypto";
 
 const formSchema = z
   .object({
@@ -50,6 +53,13 @@ const RegisterForm = ({ onSwitchToLogin }: RegisterFormProps) => {
     setIsLoading(true);
     try {
       await signUp(values.email, values.password, values.name);
+        // const docRef = await addDoc(collection(db, "users"), {
+        //   displayName: values.name,
+        //   email: values.email,
+        //   photoURL: null,
+        //   uid: crypto.randomUUID()
+        // });
+        // console.log("Document written with ID: ", docRef.id);
     } catch (error) {
       console.error("Registration error:", error);
     } finally {
