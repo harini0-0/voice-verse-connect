@@ -450,7 +450,19 @@ const ChatArea = ({ conversationId, otherUser }: ChatAreaProps) => {
                   try {
                     const formData = new FormData();
                     formData.append('option', message.isAudio ? 'speech-to-text' : 'text-to-text');
-                    formData.append('text', message.text || '');
+                    if (message.isAudio) {
+                      // Fetch the audio file from the URL and append it to formData
+                      try {
+                        const audioResponse = await fetch(message.audioUrl);
+                        const audioBlob = await audioResponse.blob();
+                        formData.append('audio', audioBlob, 'audio.webm');
+                      } catch (error) {
+                        console.error('Error fetching audio:', error);
+                        throw new Error('Failed to process audio file');
+                      }
+                    } else {
+                      formData.append('text', message.text || '');
+                    }
                     formData.append('language', language);
 
                     const response = await fetch('http://localhost:5000/translate', {
@@ -509,7 +521,19 @@ const ChatArea = ({ conversationId, otherUser }: ChatAreaProps) => {
                   try {
                     const formData = new FormData();
                     formData.append('option', message.isAudio ? 'speech-to-speech' : 'text-to-speech');
-                    formData.append('text', message.text || '');
+                    if (message.isAudio) {
+                      // Fetch the audio file from the URL and append it to formData
+                      try {
+                        const audioResponse = await fetch(message.audioUrl);
+                        const audioBlob = await audioResponse.blob();
+                        formData.append('audio', audioBlob, 'audio.webm');
+                      } catch (error) {
+                        console.error('Error fetching audio:', error);
+                        throw new Error('Failed to process audio file');
+                      }
+                    } else {
+                      formData.append('text', message.text || '');
+                    }
                     formData.append('language', language);
 
                     const response = await fetch('http://localhost:5000/translate', {

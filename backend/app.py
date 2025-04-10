@@ -1,22 +1,24 @@
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
-from deep_translator import GoogleTranslator
+from translate import Translator
 from gtts import gTTS
+from faster_whisper import WhisperModel  # Updated import
 import os
-import speech_recognition as sr
 import tempfile
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 CORS(app)
+# Load the whisper model (will download on first run)
+model = WhisperModel("base", device="cpu", compute_type="int8")
 
-def text_to_text(text_to_translate, target_language):
+def text_to_text(text, target_language):
     try:
-        translator = GoogleTranslator(target=target_language)
-        translated_text = translator.translate(text_to_translate)
+        translator = Translator(to_lang=target_language)
+        translation = translator.translate(text)
         return {
             'success': True,
-            'translated_text': translated_text
+            'translated_text': translation
         }
     except Exception as e:
         return {
@@ -24,20 +26,15 @@ def text_to_text(text_to_translate, target_language):
             'error': str(e)
         }
 
-def text_to_speech(text_to_translate, target_language):
+def text_to_speech(text, language):
     try:
-        translator = GoogleTranslator(target=target_language)
-        translated_text = translator.translate(text_to_translate)
-        tts = gTTS(text=translated_text, lang=target_language)
-        
-        # Save to temporary file
-        temp_file = tempfile.NamedTemporaryFile(suffix='.mp3', delete=False)
-        tts.save(temp_file.name)
-        
+        tts = gTTS(text=text, lang=language)
+        # Create temporary file for audio
+        temp_audio = tempfile.NamedTemporaryFile(suffix='.mp3', delete=False)
+        tts.save(temp_audio.name)
         return {
             'success': True,
-            'translated_text': translated_text,
-            'audio_path': temp_file.name
+            'audio_path': temp_audio.name
         }
     except Exception as e:
         return {
@@ -47,11 +44,9 @@ def text_to_speech(text_to_translate, target_language):
 
 def speech_to_text(audio_file_path, source_language='en'):
     try:
-        recognizer = sr.Recognizer()
-        with sr.AudioFile(audio_file_path) as source:
-            audio = recognizer.record(source)
-        
-        text = recognizer.recognize_google(audio, language=source_language)
+        # Transcribe audio using faster-whisper
+        segments, _ = model.transcribe(audio_file_path, language=source_language)
+        text = " ".join([segment.text for segment in segments])
         return {
             'success': True,
             'text': text
@@ -62,16 +57,21 @@ def speech_to_text(audio_file_path, source_language='en'):
             'error': str(e)
         }
 
-def speech_to_speech(audio_file_path, source_language, target_language):
+def speech_to_speech(audio_path, source_language, target_language):
     try:
         # First convert speech to text
-        speech_result = speech_to_text(audio_file_path, source_language)
-        if not speech_result['success']:
-            return speech_result
+        result = speech_to_text(audio_path, source_language)
+        if not result['success']:
+            return result
         
-        # Then translate and convert to speech
-        text = speech_result['text']
-        return text_to_speech(text, target_language)
+        # Then translate the text
+        translation = text_to_text(result['text'], target_language)
+        if not translation['success']:
+            return translation
+        
+        # Finally convert translated text to speech
+        return text_to_speech(translation['translated_text'], target_language)
+        
     except Exception as e:
         return {
             'success': False,
@@ -79,32 +79,38 @@ def speech_to_speech(audio_file_path, source_language, target_language):
         }
 
 def handle_text_translation(text, target_language, to_speech=False):
-    if to_speech:
-        result = text_to_speech(text, target_language)
-        if result['success']:
-            return send_file(
-                result['audio_path'],
-                mimetype='audio/mp3',
-                as_attachment=True,
-                download_name='translation.mp3'
-            )
-    else:
-        result = text_to_text(text, target_language)
-        if result['success']:
-            return jsonify({'translated_text': result['translated_text']})
-    
-    return jsonify({'error': result['error']}), 500
+    try:
+        # First translate the text
+        translation = text_to_text(text, target_language)
+        if not translation['success']:
+            return jsonify({'error': translation['error']}), 500
+            
+        if to_speech:
+            # Convert translated text to speech
+            result = text_to_speech(translation['translated_text'], target_language)
+            if result['success']:
+                return send_file(
+                    result['audio_path'],
+                    mimetype='audio/mp3',
+                    as_attachment=True,
+                    download_name='translation.mp3'
+                )
+            return jsonify({'error': result['error']}), 500
+        else:
+            return jsonify({'translated_text': translation['translated_text']})
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 def handle_speech_translation(audio_file, source_language, target_language, to_speech=False):
-    # Create temporary directory for audio file
-    temp_dir = tempfile.mkdtemp()
-    audio_path = os.path.join(temp_dir, secure_filename(audio_file.filename))
-    
     try:
-        # Save uploaded audio file
+        # Save the uploaded file temporarily
+        temp_dir = tempfile.mkdtemp()
+        audio_path = os.path.join(temp_dir, secure_filename(audio_file.filename))
         audio_file.save(audio_path)
         
         if to_speech:
+            # Convert speech to speech
             result = speech_to_speech(audio_path, source_language, target_language)
             if result['success']:
                 return send_file(
@@ -113,25 +119,24 @@ def handle_speech_translation(audio_file, source_language, target_language, to_s
                     as_attachment=True,
                     download_name='translation.mp3'
                 )
+            return jsonify({'error': result['error']}), 500
         else:
+            # Convert speech to text
             result = speech_to_text(audio_path, source_language)
-            if result['success']:
-                # Translate text if target language is different
-                if target_language != source_language:
-                    translation_result = text_to_text(result['text'], target_language)
-                    if translation_result['success']:
-                        return jsonify({
-                            'original_text': result['text'],
-                            'translated_text': translation_result['translated_text']
-                        })
-                    result = translation_result
-                else:
-                    return jsonify({'text': result['text']})
-        
-        return jsonify({'error': result['error']}), 500
-        
+            if not result['success']:
+                return jsonify({'error': result['error']}), 500
+                
+            # Translate the text
+            translation = text_to_text(result['text'], target_language)
+            if not translation['success']:
+                return jsonify({'error': translation['error']}), 500
+                
+            return jsonify({'translated_text': translation['translated_text']})
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
     finally:
-        # Clean up temporary files
+        # Cleanup temporary files
         try:
             os.remove(audio_path)
             os.rmdir(temp_dir)
@@ -179,6 +184,10 @@ def translate():
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.route("/health", methods=['GET'])
+def health_check():
+    return jsonify({'status': 'healthy'}), 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
